@@ -1,0 +1,143 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=${TZ}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${N8N_PORT}:5678"
+    environment:
+      - TZ=${TZ}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PROTOCOL=${N8N_PROTOCOL}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - GENERIC_TIMEZONE=${TZ}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  t2v-transformers:
+    image: semitechnologies/transformers-inference:cpu-1.4.2
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ}
+      - ENABLE_CUDA=false
+      - TRANSFORMERS_INFERENCE_API_PORT=8080
+      - SENTENCE_TRANSFORMERS_MODEL=${T2V_MODEL}
+    expose:
+      - "8080"
+
+  weaviate:
+    image: semitechnologies/weaviate:1.24.13
+    restart: unless-stopped
+    depends_on:
+      - t2v-transformers
+    environment:
+      - TZ=${TZ}
+      - QUERY_DEFAULTS_LIMIT=25
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=false
+      - AUTHENTICATION_APIKEY_ENABLED=true
+      - AUTHENTICATION_APIKEY_ALLOWED_KEYS=${WEAVIATE_API_KEY}
+      - AUTHENTICATION_APIKEY_USERS=${WEAVIATE_API_KEY_USER}
+      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
+      - DEFAULT_VECTORIZER_MODULE=text2vec-transformers
+      - ENABLE_MODULES=text2vec-transformers,backup-filesystem
+      - TRANSFORMERS_INFERENCE_API=http://t2v-transformers:8080
+      - CLUSTER_HOSTNAME=node1
+      - BACKUP_FILESYSTEM_PATH=/backups
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+      - weaviate_backups:/backups
+    expose:
+      - "8080"
+
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:15
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - TZ=${TZ}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - SCHEDULE=${BACKUP_TIME_CRON}
+      - BACKUP_KEEP_DAYS=${BACKUP_RETENTION_DAYS}
+      - BACKUP_DIR=/backups
+      - POSTGRES_EXTRA_OPTS=--no-owner --format=custom
+    volumes:
+      - postgres_backups:/backups
+
+  weaviate-backup:
+    image: alpine:3.19
+    restart: unless-stopped
+    depends_on:
+      - weaviate
+    environment:
+      - TZ=${TZ}
+      - BACKUP_TIME_CRON=${BACKUP_TIME_CRON}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}
+      - WEAVIATE_URL=http://weaviate:8080
+      - WEAVIATE_BACKUP_PREFIX=${WEAVIATE_BACKUP_PREFIX}
+      - WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
+    volumes:
+      - weaviate_backups:/backups
+    command: >
+      sh -c "
+      set -e;
+      apk add --no-cache curl tzdata findutils;
+      cp /usr/share/zoneinfo/${TZ} /etc/localtime || true;
+      cat >/usr/local/bin/weaviate-backup.sh <<SCRIPT
+      #!/bin/sh
+      set -e
+      id=${WEAVIATE_BACKUP_PREFIX}-\$(date +%Y%m%d)
+      curl -s -H \"Content-Type: application/json\" -H \"Authorization: Bearer ${WEAVIATE_API_KEY}\" -X POST -d \"{\\\"id\\\":\\\"\$id\\\"}\" ${WEAVIATE_URL}/v1/backups/filesystem >/dev/null 2>&1
+      find /backups -maxdepth 1 -type d -name \"${WEAVIATE_BACKUP_PREFIX}-*\" -mtime +${BACKUP_RETENTION_DAYS} -exec rm -rf {} +
+      SCRIPT
+      chmod +x /usr/local/bin/weaviate-backup.sh;
+      echo \"${BACKUP_TIME_CRON} /usr/local/bin/weaviate-backup.sh\" > /etc/crontabs/root;
+      crond -f -d 8;
+      "
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --cleanup --interval 86400
+
+volumes:
+  n8n_data:
+  postgres_data:
+  postgres_backups:
+  weaviate_data:
+  weaviate_backups:
+
+
