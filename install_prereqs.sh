@@ -60,9 +60,7 @@ install_packages() {
   # Ensure core dependencies for repo setup are present first
   apt-get install -y ca-certificates curl gnupg lsb-release
   apt-get update -y
-  
-  # Install Docker packages with allow-unauthenticated for dependencies
-  apt-get install -y --allow-unauthenticated "${PACKAGES[@]}"
+  apt-get install -y "${PACKAGES[@]}"
 }
 
 enable_docker() {

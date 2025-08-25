@@ -66,78 +66,17 @@ services:
       - AUTHENTICATION_APIKEY_USERS=${WEAVIATE_API_KEY_USER}
       - PERSISTENCE_DATA_PATH=/var/lib/weaviate
       - DEFAULT_VECTORIZER_MODULE=text2vec-transformers
-      - ENABLE_MODULES=text2vec-transformers,backup-filesystem
+      - ENABLE_MODULES=text2vec-transformers
       - TRANSFORMERS_INFERENCE_API=http://t2v-transformers:8080
       - CLUSTER_HOSTNAME=node1
-      - BACKUP_FILESYSTEM_PATH=/backups
     volumes:
       - weaviate_data:/var/lib/weaviate
-      - weaviate_backups:/backups
     expose:
       - "8080"
-
-  postgres-backup:
-    image: prodrigestivill/postgres-backup-local:15
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      - TZ=${TZ}
-      - POSTGRES_HOST=postgres
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - SCHEDULE=${BACKUP_TIME_CRON}
-      - BACKUP_KEEP_DAYS=${BACKUP_RETENTION_DAYS}
-      - BACKUP_DIR=/backups
-      - POSTGRES_EXTRA_OPTS=--no-owner --format=custom
-    volumes:
-      - postgres_backups:/backups
-
-  weaviate-backup:
-    image: alpine:3.19
-    restart: unless-stopped
-    depends_on:
-      - weaviate
-    environment:
-      - TZ=${TZ}
-      - BACKUP_TIME_CRON=${BACKUP_TIME_CRON}
-      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS}
-      - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_BACKUP_PREFIX=${WEAVIATE_BACKUP_PREFIX}
-      - WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
-    volumes:
-      - weaviate_backups:/backups
-    command: >
-      sh -c "
-      set -e;
-      apk add --no-cache curl tzdata findutils;
-      cp /usr/share/zoneinfo/${TZ} /etc/localtime || true;
-      cat >/usr/local/bin/weaviate-backup.sh <<SCRIPT
-      #!/bin/sh
-      set -e
-      id=${WEAVIATE_BACKUP_PREFIX}-\$(date +%Y%m%d)
-      curl -s -H \"Content-Type: application/json\" -H \"Authorization: Bearer ${WEAVIATE_API_KEY}\" -X POST -d \"{\\\"id\\\":\\\"\$id\\\"}\" ${WEAVIATE_URL}/v1/backups/filesystem >/dev/null 2>&1
-      find /backups -maxdepth 1 -type d -name \"${WEAVIATE_BACKUP_PREFIX}-*\" -mtime +${BACKUP_RETENTION_DAYS} -exec rm -rf {} +
-      SCRIPT
-      chmod +x /usr/local/bin/weaviate-backup.sh;
-      echo \"${BACKUP_TIME_CRON} /usr/local/bin/weaviate-backup.sh\" > /etc/crontabs/root;
-      crond -f -d 8;
-      "
-
-  watchtower:
-    image: containrrr/watchtower:latest
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --cleanup --interval 86400
 
 volumes:
   n8n_data:
   postgres_data:
-  postgres_backups:
   weaviate_data:
-  weaviate_backups:
 
 
