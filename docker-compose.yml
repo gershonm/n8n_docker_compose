@@ -16,7 +16,7 @@ services:
       retries: 10
 
   n8n:
-    image: docker.n8n.io/n8nio/n8n:latest
+    image: docker.n8n.io/n8nio/n8n
     restart: unless-stopped
     depends_on:
       postgres:
@@ -40,21 +40,30 @@ services:
       - n8n_data:/home/node/.n8n
 
   t2v-transformers:
-    image: semitechnologies/transformers-inference:cpu-1.4.2
+    image: cr.weaviate.io/semitechnologies/transformers-inference:sentence-transformers-multi-qa-MiniLM-L6-cos-v1
     restart: unless-stopped
     environment:
       - TZ=${TZ}
-      - ENABLE_CUDA=false
+      - ENABLE_CUDA=0
       - TRANSFORMERS_INFERENCE_API_PORT=8080
-      - SENTENCE_TRANSFORMERS_MODEL=${T2V_MODEL}
     expose:
       - "8080"
 
   weaviate:
-    image: semitechnologies/weaviate:1.24.13
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --scheme
+      - http
+    image: cr.weaviate.io/semitechnologies/weaviate
     restart: unless-stopped
     depends_on:
       - t2v-transformers
+    ports:
+      - "8080:8080"
+      - "50051:50051"
     environment:
       - TZ=${TZ}
       - QUERY_DEFAULTS_LIMIT=25
@@ -69,8 +78,6 @@ services:
       - CLUSTER_HOSTNAME=node1
     volumes:
       - weaviate_data:/var/lib/weaviate
-    expose:
-      - "8080"
 
 volumes:
   n8n_data:
